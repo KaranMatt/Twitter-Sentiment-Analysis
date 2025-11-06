@@ -1,6 +1,3 @@
-Here's the updated README with your requested additions:[1][2][9][11]
-
-***
 
 # Twitter Sentiment Analysis
 
