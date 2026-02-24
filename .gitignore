@@ -1,0 +1,4 @@
+/data
+/Models
+mlruns/
+__pycache__
