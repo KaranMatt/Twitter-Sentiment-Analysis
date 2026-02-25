@@ -1,11 +1,15 @@
 
 # Twitter Sentiment Analysis
 
-A comprehensive sentiment analysis system that classifies tweets into four sentiment categories (Positive, Negative, Neutral, Irrelevant) using deep learning and traditional machine learning approaches with DVC for data and model versioning.
+A comprehensive sentiment analysis system that classifies tweets into four sentiment categories (Positive, Negative, Neutral, Irrelevant) using deep learning and traditional machine learning approaches, served via a FastAPI REST API, with DVC for data and model versioning.
 
 ## Overview
 
 This project performs sentiment analysis on Twitter data using both traditional ML algorithms and deep learning models (LSTM and GRU). The system processes ~75,000 tweets and achieves over 80% accuracy using ensemble methods. Interestingly, traditional models outperform deep learning approaches on this dataset, demonstrating that simpler models can be more effective for moderately-sized, less complex datasets.
+
+## Repository
+
+[KaranMatt/Twitter-Sentiment-Analysis](https://github.com/KaranMatt/Twitter-Sentiment-Analysis)
 
 ## Dataset
 
@@ -35,13 +39,15 @@ This project performs sentiment analysis on Twitter data using both traditional 
   - Best validation accuracy: ~81%
   - Architecture: 3-layer GRU with dropout regularization
 - **Text Vectorization**: Custom vocabulary (10,000 tokens, max length 42)
+- **Vocabulary Persistence**: The fitted `TextVectorization` vocabulary is extracted via `get_vocabulary()` and saved to `Models/TextVectorVocab.pkl` using joblib. At API startup, the vocab is reloaded and injected back into the vectorization layer via `set_vocabulary()`, ensuring consistent tokenization without needing to re-adapt the layer on raw data.
 - **Callbacks**: EarlyStopping, ReduceLROnPlateau
 - **Tracked Models**: Two best LSTM models versioned with DVC
 
 #### Traditional ML Models
-- **Random Forest**: Best performer (~88% test accuracy)
+- **Random Forest**: Best performer (~88% test accuracy), saved as `Models/rf.pkl`
 - **Decision Tree**: ~88% test accuracy with max_depth=85
 - **Logistic Regression**: Baseline model (~74% test accuracy)
+- **TF-IDF Vectorizer**: Saved as `Models/tfidf.pkl` for consistent inference
 - **Tracked Models**: Logistic Regression and Random Forest versioned with DVC (`models.dvc`)
 
 ## Technologies Used
@@ -50,15 +56,67 @@ This project performs sentiment analysis on Twitter data using both traditional 
 - **Deep Learning**: TensorFlow/Keras
 - **ML Libraries**: scikit-learn
 - **NLP**: NLTK
+- **API**: FastAPI, Uvicorn, Pydantic
 - **Version Control**: DVC (Data Version Control)
 - **Experiment Tracking**: MLflow
 - **Data Handling**: pandas, numpy
 - **Model Persistence**: joblib
 
+## API — FastAPI Deployment
+
+The project exposes both the Random Forest (traditional ML) and LSTM (deep learning) models through a single FastAPI application (`main.py`). All models and artifacts are loaded once at startup via a lifespan context manager. The LSTM's `TextVectorization` vocabulary is restored from `Models/TextVectorVocab.pkl` at startup using `set_vocabulary()`.
+
+### Endpoints
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/root` | Welcome message |
+| GET | `/health` | Check if models are loaded and ready |
+| POST | `/predict/trad-ml` | Predict sentiment using Random Forest (with full preprocessing pipeline) |
+| POST | `/predict/dl` | Predict sentiment using LSTM |
+
+### Request & Response
+
+Both prediction endpoints share the same schema:
+
+**Request body:**
+```json
+{ "tweet": "I absolutely love this game!" }
+```
+
+**Response:**
+```json
+{
+  "sentiment": "Positive",
+  "probability": 0.94
+}
+```
+
+Sentiment values: `Positive`, `Neutral`, `Negative`, `Irrelevant`
+
+The `/predict/trad-ml` endpoint applies the full NLP preprocessing pipeline (tokenization, lowercasing, stopword removal, lemmatization) before TF-IDF transformation, while `/predict/dl` passes the raw tweet directly to the LSTM with the restored vectorization layer.
+
+### Running the API
+
+```bash
+# Install API dependencies
+pip install fastapi uvicorn
+
+# Start the server
+uvicorn main:app --reload
+```
+
+Interactive docs available at `http://127.0.0.1:8000/docs`.
+
 ## Installation
 
 ```bash
-pip install tensorflow scikit-learn nltk pandas numpy mlflow dvc
+# Clone the repository
+git clone https://github.com/KaranMatt/Twitter-Sentiment-Analysis
+cd Twitter-Sentiment-Analysis
+
+# Install dependencies
+pip install -r requirements.txt
 ```
 
 Download NLTK resources:
@@ -68,48 +126,51 @@ nltk.download('stopwords')
 nltk.download('wordnet')
 ```
 
-Initialize DVC:
-```bash
-dvc init
-dvc remote add -d storage <your-remote-storage>
-```
-
-## Usage
-
-1. **Pull Data and Models from DVC**:
+Pull DVC-tracked files:
 ```bash
 dvc pull data.dvc
 dvc pull models.dvc
 ```
 
-2. **Data Preprocessing**:
-```python
-# Load and preprocess data
-combined_df = pd.concat([train_df, test_df])
-combined_df['processed_text'] = preprocess_pipeline(combined_df['text'])
+## Usage
+
+**Via the API (recommended):**
+
+```bash
+# Traditional ML endpoint
+curl -X POST "http://127.0.0.1:8000/predict/trad-ml" \
+     -H "Content-Type: application/json" \
+     -d '{"tweet": "I absolutely love this game!"}'
+
+# Deep Learning endpoint
+curl -X POST "http://127.0.0.1:8000/predict/dl" \
+     -H "Content-Type: application/json" \
+     -d '{"tweet": "I absolutely love this game!"}'
 ```
 
-3. **Train Deep Learning Model**:
+**Directly in Python:**
+
 ```python
-# LSTM/GRU model training with MLflow tracking
-model.fit(train_inputs, train_target, 
-          epochs=20, 
+# Train Deep Learning Model
+model.fit(train_inputs, train_target,
+          epochs=20,
           validation_data=(val_inputs, val_target),
           callbacks=[early_stopping, reduce_lr])
-```
 
-4. **Train Traditional ML Model**:
-```python
-# Random Forest training
+# Save vocab for deployment
+import joblib
+vocab = text_vectorizer.get_vocabulary()
+joblib.dump(vocab, 'Models/TextVectorVocab.pkl')
+
+# Train Traditional ML Model
 model_forest = RandomForestClassifier(n_estimators=120, max_depth=250)
 model_forest.fit(train_tfidf, train_label)
 ```
 
-5. **Version Control with DVC**:
+**Version Control with DVC:**
 ```bash
-# Track new data or models
 dvc add Data/twitter_training.csv
-dvc add models/rf_model.pkl
+dvc add Models/rf.pkl
 git add data.dvc models.dvc
 git commit -m "Update models and data"
 dvc push
@@ -141,47 +202,6 @@ Traditional machine learning models (Random Forest, Decision Tree) significantly
 
 This demonstrates an important principle in ML: **more complex models aren't always better**. Model selection should be based on dataset characteristics, complexity of the task, and available computational resources.
 
-## Project Structure
-
-```
-├── Data/
-│   ├── twitter_training.csv
-│   └── twitter_validation.csv
-├── Models/
-│   ├── lstm.h5            # LSTM models (DVC tracked)
-│   ├── rf_model.pkl       # Random Forest (DVC tracked)
-│   └── logreg_model.pkl   # Logistic Regression (DVC tracked)
-├── Twitter-Sentimental.ipynb
-├── data.dvc               # DVC pointer for dataset
-├── models.dvc             # DVC pointer for models
-├── .dvc/                  # DVC configuration
-└── mlruns/                # MLflow experiment tracking
-```
-
-## Version Control Strategy
-
-### DVC Tracked Assets
-- **data.dvc**: Points to `twitter_training.csv` and `twitter_validation.csv`
-- **models.dvc**: Points to versioned models:
-  - Logistic Regression baseline
-  - Random Forest (best performer)
-  - Two best LSTM variants
-
-### Benefits of DVC Integration
-- Reproducible experiments across team members
-- Version control for large data files and models
-- Easy rollback to previous model versions
-- Efficient storage with remote backends
-- Seamless collaboration without storing large binaries in Git
-
-## Key Insights
-
-- **Traditional models outperform deep learning** on this moderately-sized dataset due to limited complexity and insufficient data for deep models to capture intricate sequential patterns
-- Text preprocessing (lemmatization, stopword removal) significantly improves performance
-- Deep learning models show signs of overfitting despite regularization techniques
-- Class balance is relatively good, reducing need for resampling techniques
-- TF-IDF + Random Forest provides an excellent baseline that's hard to beat for this task
-
 ## Experiment Tracking
 
 All experiments are tracked using MLflow, including:
@@ -191,15 +211,70 @@ All experiments are tracked using MLflow, including:
 - Tags for easy filtering
 - Comparison across traditional and deep learning approaches
 
+## Version Control Strategy
+
+### DVC Tracked Assets
+- **data.dvc**: Points to `twitter_training.csv` and `twitter_validation.csv`
+- **models.dvc**: Points to versioned models:
+  - Logistic Regression baseline (`logreg_model.pkl`)
+  - TF-IDF vectorizer (`tfidf.pkl`)
+  - Random Forest — best performer (`rf.pkl`)
+  - Two best LSTM variants (`lstm.h5` / `lstm.keras`)
+  - TextVectorization vocabulary (`TextVectorVocab.pkl`)
+
+### Benefits of DVC Integration
+- Reproducible experiments across team members
+- Version control for large data files and models
+- Easy rollback to previous model versions
+- Efficient storage with remote backends
+- Seamless collaboration without storing large binaries in Git
+
+## Project Structure
+
+```
+Twitter-Sentiment-Analysis/
+│
+├── Data/
+│   ├── twitter_training.csv       # DVC-tracked (git-ignored)
+│   └── twitter_validation.csv    # DVC-tracked (git-ignored)
+│
+├── Models/
+│   ├── lstm.keras                 # DVC-tracked LSTM model (git-ignored)
+│   ├── rf.pkl                     # DVC-tracked Random Forest (git-ignored)
+│   ├── tfidf.pkl                  # DVC-tracked TF-IDF vectorizer (git-ignored)
+│   └── TextVectorVocab.pkl        # DVC-tracked TextVectorization vocab (git-ignored)
+│
+├── data.dvc                       # DVC pointer for dataset
+├── models.dvc                     # DVC pointer for models
+├── mlruns/                        # MLflow experiment logs (git-ignored)
+├── Twitter-Sentimental.ipynb      # Main notebook
+├── main.py                        # FastAPI application
+├── .gitignore                     # Excludes Models/, Data/, mlruns/, __pycache__/
+├── .dvc/                          # DVC configuration
+├── .dvcignore
+├── requirements.txt
+└── README.md
+```
+
+## Key Insights
+
+- **Traditional models outperform deep learning** on this moderately-sized dataset due to limited complexity and insufficient data for deep models to capture intricate sequential patterns
+- Text preprocessing (lemmatization, stopword removal) significantly improves performance
+- Deep learning models show signs of overfitting despite regularization techniques
+- Class balance is relatively good, reducing need for resampling techniques
+- TF-IDF + Random Forest provides an excellent baseline that's hard to beat for this task
+- Saving the `TextVectorization` vocabulary separately enables reliable DL model deployment without re-adapting the layer at inference time
+
 ## Future Improvements
 
-- Implement transfer learning with pre-trained embeddings (Word2Vec, GloVe)
-- Experiment with transformer-based models (BERT, RoBERTa) for larger datasets
-- Add cross-validation for more robust evaluation
-- Deploy model as REST API using DVC pipeline
-- Implement real-time tweet classification
-- Expand dataset size to better leverage deep learning capabilities
-- Create DVC pipelines for automated retraining
+- [ ] Implement transfer learning with pre-trained embeddings (Word2Vec, GloVe)
+- [ ] Experiment with transformer-based models (BERT, RoBERTa) for larger datasets
+- [ ] Add cross-validation for more robust evaluation
+- [x] Deploy model as REST API using FastAPI
+- [ ] Implement real-time tweet classification
+- [ ] Expand dataset size to better leverage deep learning capabilities
+- [ ] Create DVC pipelines for automated retraining
+- [ ] Create web interface with Streamlit/Gradio
 
 ## Requirements
 
@@ -212,10 +287,19 @@ numpy>=1.24.0
 mlflow>=2.5.0
 dvc>=3.0.0
 joblib>=1.3.0
+fastapi
+uvicorn
+pydantic
 ```
 
 ## License
 
 This project is open-source and available for educational purposes.
+
+## Author
+
+Karan Mattoo
+
+GitHub: [KaranMatt/Twitter-Sentiment-Analysis](https://github.com/KaranMatt/Twitter-Sentiment-Analysis)
 
 ---
